@@ -46,7 +46,12 @@ contract PortalHookTest is Test, Fixtures {
                     Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
             ) ^ (0x4441 << 144) // Namespace the hook to avoid collisions
         );
-        bytes memory constructorArgs = abi.encode(manager); //Add all the necessary constructor arguments from the hook
+        // TODO: router and link address
+        bytes memory constructorArgs = abi.encode(
+            manager,
+            address(this),
+            address(this)
+        );
         deployCodeTo("PortalHook.sol:PortalHook", constructorArgs, flags);
         hook = PortalHook(flags);
 
@@ -72,7 +77,7 @@ contract PortalHookTest is Test, Fixtures {
         );
     }
 
-    function testZerForOne() public {
+    function testZeroForOneExactInput() public {
         // positions were created in setup()
         assertEq(hook.beforeAddLiquidityCount(poolId), 0);
         assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
@@ -97,7 +102,7 @@ contract PortalHookTest is Test, Fixtures {
         assertEq(hook.afterSwapCount(poolId), 1);
     }
 
-    function testOneForZero() public {
+    function testOneForZeroExactInput() public {
         // positions were created in setup()
         assertEq(hook.beforeAddLiquidityCount(poolId), 0);
         assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);

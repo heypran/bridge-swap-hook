@@ -10,8 +10,15 @@ import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 
+import "forge-std/console.sol";
+
 contract PortalHook is BaseHook {
     using PoolIdLibrary for PoolKey;
+
+    enum PayFeesIn {
+        Native,
+        LINK
+    }
 
     // NOTE: ---------------------------------------------------------
     // state variables should typically be unique to a pool
@@ -24,7 +31,21 @@ contract PortalHook is BaseHook {
     mapping(PoolId => uint256 count) public beforeAddLiquidityCount;
     mapping(PoolId => uint256 count) public beforeRemoveLiquidityCount;
 
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    // CCIP
+    address immutable ccipRouter;
+    address immutable linkToken;
+
+    PayFeesIn public bridgeFeeTokenType = PayFeesIn.Native; // for local testing
+    uint64 destinationChainSelector = 16015286601757825753; // for local testing
+
+    constructor(
+        IPoolManager _poolManager,
+        address _router,
+        address _link
+    ) BaseHook(_poolManager) {
+        ccipRouter = _router;
+        linkToken = _link;
+    }
 
     function getHookPermissions()
         public
@@ -81,11 +102,29 @@ contract PortalHook is BaseHook {
 
         // isBridgeTx
 
-        int128 outputAmount = params.zeroForOne
-            ? delta.amount1()
-            : delta.amount0();
+        int128 outputAmount = settleCurrency(key, delta, params.zeroForOne);
 
-        if (params.zeroForOne) {
+        // bool exactInput = params.amountSpecified < 0;
+
+        // int128 unspecifiedAmount = exactInput == params.zeroForOne
+        //     ? delta.amount1()
+        //     : delta.amount0();
+        // console.logInt(unspecifiedAmount);
+
+        return (BaseHook.afterSwap.selector, outputAmount);
+    }
+
+    function settleCurrency(
+        PoolKey memory key,
+        BalanceDelta delta,
+        bool zeroForOne
+    ) internal returns (int128) {
+        int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
+        console.log("deltas");
+        console.logInt(delta.amount0());
+        console.logInt(delta.amount1());
+
+        if (zeroForOne) {
             poolManager.take(
                 key.currency1,
                 address(this),
@@ -99,6 +138,6 @@ contract PortalHook is BaseHook {
             );
         }
 
-        return (BaseHook.afterSwap.selector, outputAmount);
+        return outputAmount;
     }
 }

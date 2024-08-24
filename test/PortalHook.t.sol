@@ -72,7 +72,7 @@ contract PortalHookTest is Test, Fixtures {
         );
     }
 
-    function testCounterHooks() public {
+    function testZerForOne() public {
         // positions were created in setup()
         assertEq(hook.beforeAddLiquidityCount(poolId), 0);
         assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
@@ -92,6 +92,31 @@ contract PortalHookTest is Test, Fixtures {
         // ------------------- //
 
         assertEq(int256(swapDelta.amount0()), amountSpecified);
+
+        assertEq(hook.beforeSwapCount(poolId), 1);
+        assertEq(hook.afterSwapCount(poolId), 1);
+    }
+
+    function testOneForZero() public {
+        // positions were created in setup()
+        assertEq(hook.beforeAddLiquidityCount(poolId), 0);
+        assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
+
+        assertEq(hook.beforeSwapCount(poolId), 0);
+        assertEq(hook.afterSwapCount(poolId), 0);
+
+        // Perform a test swap //
+        bool zeroForOne = false;
+        int256 amountSpecified = -1e18; // negative number indicates exact input swap!
+        BalanceDelta swapDelta = swap(
+            key,
+            zeroForOne,
+            amountSpecified,
+            ZERO_BYTES
+        );
+        // ------------------- //
+
+        assertEq(int256(swapDelta.amount1()), amountSpecified);
 
         assertEq(hook.beforeSwapCount(poolId), 1);
         assertEq(hook.afterSwapCount(poolId), 1);

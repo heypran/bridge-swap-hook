@@ -72,11 +72,33 @@ contract PortalHook is BaseHook {
     function afterSwap(
         address,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata,
-        BalanceDelta,
+        IPoolManager.SwapParams calldata params,
+        BalanceDelta delta,
         bytes calldata
     ) external override returns (bytes4, int128) {
+        // TODO remove later
         afterSwapCount[key.toId()]++;
-        return (BaseHook.afterSwap.selector, 0);
+
+        // isBridgeTx
+
+        int128 outputAmount = params.zeroForOne
+            ? delta.amount1()
+            : delta.amount0();
+
+        if (params.zeroForOne) {
+            poolManager.take(
+                key.currency1,
+                address(this),
+                uint128(outputAmount)
+            );
+        } else {
+            poolManager.take(
+                key.currency0,
+                address(this),
+                uint128(outputAmount)
+            );
+        }
+
+        return (BaseHook.afterSwap.selector, outputAmount);
     }
 }

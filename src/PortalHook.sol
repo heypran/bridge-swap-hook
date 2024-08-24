@@ -10,6 +10,12 @@ import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 
+import {Currency} from "v4-core/src/types/Currency.sol";
+import {IERC20} from "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
+import {LinkTokenInterface} from "@chainlink/contracts/src/v0.8/interfaces/LinkTokenInterface.sol";
+import {IRouterClient} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRouterClient.sol";
+import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
+
 import "forge-std/console.sol";
 
 contract PortalHook is BaseHook {
@@ -130,14 +136,76 @@ contract PortalHook is BaseHook {
                 address(this),
                 uint128(outputAmount)
             );
+
+            IERC20 token1 = IERC20(Currency.unwrap(key.currency1));
+            IERC20(token1).approve(ccipRouter, uint128(outputAmount));
+            // TODO refactor
+            bridgeTokens(address(this), address(token1), uint128(outputAmount));
         } else {
             poolManager.take(
                 key.currency0,
                 address(this),
                 uint128(outputAmount)
             );
+            IERC20 token0 = IERC20(Currency.unwrap(key.currency0));
+            IERC20(token0).approve(ccipRouter, uint128(outputAmount));
+            // TODO refactor
+            bridgeTokens(address(this), address(token0), uint128(outputAmount));
         }
 
         return outputAmount;
+    }
+
+    function bridgeTokens(
+        address receiver,
+        address outputToken,
+        uint256 outputAmount
+    ) internal {
+        // TODO refactor
+
+        Client.EVMTokenAmount[]
+            memory tokensToSendDetails = new Client.EVMTokenAmount[](1);
+
+        Client.EVMTokenAmount memory tokenToSendDetails = Client
+            .EVMTokenAmount({
+                token: address(outputToken),
+                amount: outputAmount
+            });
+
+        tokensToSendDetails[0] = tokenToSendDetails;
+
+        // brdige
+
+        uint256 length = tokensToSendDetails.length;
+
+        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
+            receiver: abi.encode(receiver),
+            data: "",
+            tokenAmounts: tokensToSendDetails,
+            extraArgs: "",
+            feeToken: bridgeFeeTokenType == PayFeesIn.LINK
+                ? linkToken
+                : address(0)
+        });
+
+        uint256 fee = IRouterClient(ccipRouter).getFee(
+            destinationChainSelector,
+            message
+        );
+
+        bytes32 messageId;
+
+        if (bridgeFeeTokenType == PayFeesIn.LINK) {
+            LinkTokenInterface(linkToken).approve(ccipRouter, fee);
+            messageId = IRouterClient(ccipRouter).ccipSend(
+                destinationChainSelector,
+                message
+            );
+        } else {
+            messageId = IRouterClient(ccipRouter).ccipSend{value: fee}(
+                destinationChainSelector,
+                message
+            );
+        }
     }
 }

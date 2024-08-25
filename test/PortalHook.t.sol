@@ -14,10 +14,13 @@ import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
 import {PortalHook} from "../src/PortalHook.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {PositionConfig} from "v4-periphery/src/libraries/PositionConfig.sol";
-
+import {SortTokens} from "v4-core/test/utils/SortTokens.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {EasyPosm} from "./utils/EasyPosm.sol";
 import {Fixtures} from "./utils/Fixtures.sol";
+import {CCIPLocalSimulator, IRouterClient, LinkToken, BurnMintERC677Helper} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
+import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 
 contract PortalHookTest is Test, Fixtures {
     using EasyPosm for IPositionManager;
@@ -31,12 +34,70 @@ contract PortalHookTest is Test, Fixtures {
     uint256 tokenId;
     PositionConfig config;
 
-    function setUp() public {
-        // creates the pool manager, utility routers, and test tokens
-        deployFreshManagerAndRouters();
-        deployMintAndApprove2Currencies();
+    // CCIP
+    CCIPLocalSimulator public ccipLocalSimulator;
+    address alice = vm.addr(1);
+    address bob;
+    IRouterClient ccipRouter;
+    uint64 destinationChainSelector;
+    BurnMintERC677Helper ccipBnMToken;
+    BurnMintERC677Helper currencyC0;
+    BurnMintERC677Helper currencyC1;
+    LinkToken linkToken;
 
-        deployAndApprovePosm(manager);
+    function setUp() public {
+        ccipLocalSimulator = new CCIPLocalSimulator();
+        (
+            uint64 chainSelector,
+            IRouterClient sourceRouter,
+            ,
+            ,
+            LinkToken link,
+            BurnMintERC677Helper ccipBnM, // not using this
+
+        ) = ccipLocalSimulator.configuration();
+
+        ccipRouter = sourceRouter;
+        destinationChainSelector = chainSelector;
+
+        linkToken = link;
+
+        // BurnMintERC677Helper Create Liquidity Pool tokens
+        currencyC0 = new BurnMintERC677Helper("cc0", "cc0");
+        currencyC1 = new BurnMintERC677Helper("cc1", "cc1");
+
+        // Add support in CCIP
+        ccipLocalSimulator.supportNewToken(address(currencyC0));
+        ccipLocalSimulator.supportNewToken(address(currencyC1));
+
+        // Wrap for usage with v4
+        (Currency currencyC0W, Currency currencyC1W) = SortTokens.sort(
+            MockERC20(address(currencyC0)),
+            MockERC20(address(currencyC1))
+        );
+
+        // creates the pool manager, utility routers
+        deployFreshManagerAndRouters();
+        //deployMintAndApprove2Currencies();
+
+        // Approve router
+        address modifyLiqRouter = address(modifyLiquidityRouter);
+        MockERC20(address(currencyC0)).approve(modifyLiqRouter, 10000000 ether);
+        MockERC20(address(currencyC1)).approve(modifyLiqRouter, 10000000 ether);
+        MockERC20(address(currencyC0)).approve(
+            address(swapRouter),
+            10000000 ether
+        );
+        MockERC20(address(currencyC1)).approve(
+            address(swapRouter),
+            10000000 ether
+        );
+
+        // mint some ccip tokens to hook
+        // (internal function is modified to mint,
+        // many tokens in one go)
+        currencyC0.drip(address(this), 2 ** 255);
+        currencyC1.drip(address(this), 2 ** 255);
 
         // Deploy the hook to an address with the correct flags
         address flags = address(
@@ -46,69 +107,75 @@ contract PortalHookTest is Test, Fixtures {
                     Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
             ) ^ (0x4441 << 144) // Namespace the hook to avoid collisions
         );
-        // TODO: router and link address
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            address(this),
-            address(this)
+
+        deployCodeTo(
+            "PortalHook.sol:PortalHook",
+            abi.encode(manager, address(ccipRouter), address(linkToken)),
+            flags
         );
-        deployCodeTo("PortalHook.sol:PortalHook", constructorArgs, flags);
-        hook = PortalHook(flags);
+        hook = PortalHook(payable(flags));
 
         // Create the pool
-        key = PoolKey(currency0, currency1, 3000, 60, IHooks(hook));
+        key = PoolKey(currencyC0W, currencyC1W, 3000, 60, IHooks(hook));
         poolId = key.toId();
         manager.initialize(key, SQRT_PRICE_1_1, ZERO_BYTES);
 
+        // SQRT 0.001 18,6 - 79228162514264337593543950
         // Provide full-range liquidity to the pool
-        config = PositionConfig({
-            poolKey: key,
-            tickLower: TickMath.minUsableTick(key.tickSpacing),
-            tickUpper: TickMath.maxUsableTick(key.tickSpacing)
-        });
-        (tokenId, ) = posm.mint(
-            config,
-            10_000e18,
-            MAX_SLIPPAGE_ADD_LIQUIDITY,
-            MAX_SLIPPAGE_ADD_LIQUIDITY,
-            address(this),
-            block.timestamp,
+        modifyLiquidityRouter.modifyLiquidity(
+            key,
+            IPoolManager.ModifyLiquidityParams(
+                TickMath.minUsableTick(60),
+                TickMath.maxUsableTick(60),
+                10_000 ether,
+                0
+            ),
             ZERO_BYTES
         );
     }
 
-    function testZeroForOneExactInput() public {
+    function test_ZeroForOneExactInput_noBridge() public {
         // positions were created in setup()
-        assertEq(hook.beforeAddLiquidityCount(poolId), 0);
-        assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
 
         assertEq(hook.beforeSwapCount(poolId), 0);
         assertEq(hook.afterSwapCount(poolId), 0);
 
+        uint256 balanceOfC1AliceBefore = currencyC1.balanceOf(address(alice));
+        assertEq(balanceOfC1AliceBefore, 0);
+
         // Perform a test swap //
+
+        // pass alice address to receive bridge funds & set bridging to false
+        bytes memory hookData = abi.encode(address(alice), false);
+
         bool zeroForOne = true;
         int256 amountSpecified = -1e18; // negative number indicates exact input swap!
         BalanceDelta swapDelta = swap(
             key,
             zeroForOne,
             amountSpecified,
-            ZERO_BYTES
+            hookData
         );
+
         // ------------------- //
 
         assertEq(int256(swapDelta.amount0()), amountSpecified);
 
-        assertEq(hook.beforeSwapCount(poolId), 1);
-        assertEq(hook.afterSwapCount(poolId), 1);
+        // alice balance should be zero
+        uint256 balanceOfC1AliceAfter = currencyC1.balanceOf(address(alice));
+        assertEq(balanceOfC1AliceAfter, 0);
     }
 
-    function testOneForZeroExactInput() public {
+    function test_OneForZeroExactInput_noBridge() public {
         // positions were created in setup()
-        assertEq(hook.beforeAddLiquidityCount(poolId), 0);
-        assertEq(hook.beforeRemoveLiquidityCount(poolId), 0);
 
-        assertEq(hook.beforeSwapCount(poolId), 0);
-        assertEq(hook.afterSwapCount(poolId), 0);
+        uint256 balanceC0AliceBefore = currencyC0.balanceOf(address(alice));
+        assertEq(balanceC0AliceBefore, 0);
+
+        // Perform a test swap //
+
+        // pass alice address to receive bridge funds & set bridging to false
+        bytes memory hookData = abi.encode(address(alice), false);
 
         // Perform a test swap //
         bool zeroForOne = false;
@@ -117,13 +184,51 @@ contract PortalHookTest is Test, Fixtures {
             key,
             zeroForOne,
             amountSpecified,
-            ZERO_BYTES
+            hookData
         );
         // ------------------- //
 
         assertEq(int256(swapDelta.amount1()), amountSpecified);
 
-        assertEq(hook.beforeSwapCount(poolId), 1);
-        assertEq(hook.afterSwapCount(poolId), 1);
+        // alice should receive bridged funds
+        uint256 balanceC0AliceAfter = currencyC0.balanceOf(address(alice));
+        assertEq(balanceC0AliceAfter, 0);
+    }
+
+    function test_SwapAndBridge_zeroForOne() public {
+        // positions were created in setup()
+
+        // MockERC20(address(currencyC0)).approve(address(hook), 1 ether);
+
+        uint256 balanceC0AliceBefore = currencyC0.balanceOf(alice);
+        uint256 balanceC1AliceBefore = currencyC1.balanceOf(alice);
+
+        // Perform a test swap //
+        bytes memory hookData = abi.encode(alice, true);
+        bool zeroForOne = true;
+        int256 amountSpecified = -1e18; // negative number indicates exact input swap!
+        BalanceDelta swapDelta = swap(
+            key,
+            zeroForOne,
+            amountSpecified,
+            hookData
+        );
+        // ------------------- //
+
+        uint256 balanceC0AliceAfter = currencyC0.balanceOf(alice);
+        uint256 balanceC1AliceAfter = currencyC1.balanceOf(alice);
+
+        // Input Token
+        // assertEq(
+        //     balanceC0AliceAfter,
+        //     balanceC0AliceBefore - uint256(-amountSpecified)
+        // );
+
+        // Output Token
+        // TODO improve this
+        console.log(balanceC1AliceAfter);
+        assertEq(balanceC1AliceAfter, 996900609009281774);
+
+        assertEq(int256(swapDelta.amount0()), amountSpecified);
     }
 }

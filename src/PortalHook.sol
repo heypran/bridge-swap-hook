@@ -101,14 +101,26 @@ contract PortalHook is BaseHook {
         PoolKey calldata key,
         IPoolManager.SwapParams calldata params,
         BalanceDelta delta,
-        bytes calldata
+        bytes calldata hookData
     ) external override returns (bytes4, int128) {
         // TODO remove later
         afterSwapCount[key.toId()]++;
 
-        // isBridgeTx
-
-        int128 outputAmount = settleCurrency(key, delta, params.zeroForOne);
+        (address receiver, bool isBridgeTx) = abi.decode(
+            hookData,
+            (address, bool)
+        );
+        console.log("rever");
+        console.log(receiver);
+        if (isBridgeTx) {
+            int128 outputAmount = settleCurrency(
+                key,
+                delta,
+                params.zeroForOne,
+                receiver
+            );
+            return (BaseHook.afterSwap.selector, outputAmount);
+        }
 
         // bool exactInput = params.amountSpecified < 0;
 
@@ -117,18 +129,18 @@ contract PortalHook is BaseHook {
         //     : delta.amount0();
         // console.logInt(unspecifiedAmount);
 
-        return (BaseHook.afterSwap.selector, outputAmount);
+        return (BaseHook.afterSwap.selector, 0);
     }
 
     function settleCurrency(
         PoolKey memory key,
         BalanceDelta delta,
-        bool zeroForOne
+        bool zeroForOne,
+        address receiver
     ) internal returns (int128) {
         int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
-        console.log("deltas");
-        console.logInt(delta.amount0());
-        console.logInt(delta.amount1());
+
+        IERC20 outputToken;
 
         if (zeroForOne) {
             poolManager.take(
@@ -137,21 +149,19 @@ contract PortalHook is BaseHook {
                 uint128(outputAmount)
             );
 
-            IERC20 token1 = IERC20(Currency.unwrap(key.currency1));
-            IERC20(token1).approve(ccipRouter, uint128(outputAmount));
-            // TODO refactor
-            bridgeTokens(address(this), address(token1), uint128(outputAmount));
+            outputToken = IERC20(Currency.unwrap(key.currency1));
+            IERC20(outputToken).approve(ccipRouter, uint128(outputAmount));
         } else {
             poolManager.take(
                 key.currency0,
                 address(this),
                 uint128(outputAmount)
             );
-            IERC20 token0 = IERC20(Currency.unwrap(key.currency0));
-            IERC20(token0).approve(ccipRouter, uint128(outputAmount));
-            // TODO refactor
-            bridgeTokens(address(this), address(token0), uint128(outputAmount));
+            outputToken = IERC20(Currency.unwrap(key.currency0));
+            IERC20(outputToken).approve(ccipRouter, uint128(outputAmount));
         }
+
+        bridgeTokens(receiver, address(outputToken), uint128(outputAmount));
 
         return outputAmount;
     }
@@ -175,8 +185,6 @@ contract PortalHook is BaseHook {
         tokensToSendDetails[0] = tokenToSendDetails;
 
         // brdige
-
-        uint256 length = tokensToSendDetails.length;
 
         Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
             receiver: abi.encode(receiver),

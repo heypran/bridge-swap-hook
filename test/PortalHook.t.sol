@@ -94,17 +94,16 @@ contract PortalHookTest is Test, Fixtures {
         );
 
         // mint some ccip tokens to hook
-        // (internal function is modified to mint,
+        // (internal function is modified to mint
         // many tokens in one go)
+        // alternative is run the internal function in a loop
         currencyC0.drip(address(this), 2 ** 255);
         currencyC1.drip(address(this), 2 ** 255);
 
         // Deploy the hook to an address with the correct flags
         address flags = address(
             uint160(
-                Hooks.BEFORE_SWAP_FLAG |
-                    Hooks.AFTER_SWAP_FLAG |
-                    Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+                Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
             ) ^ (0x4441 << 144) // Namespace the hook to avoid collisions
         );
 
@@ -134,11 +133,17 @@ contract PortalHookTest is Test, Fixtures {
         );
     }
 
-    function test_ZeroForOneExactInput_noBridge() public {
-        // positions were created in setup()
+    function dripToUser(
+        Currency currency,
+        address user,
+        uint256 amount
+    ) internal {
+        currencyC1.drip(address(alice), 10 ether);
+        currencyC1.drip(address(alice), 10 ether);
+    }
 
-        assertEq(hook.beforeSwapCount(poolId), 0);
-        assertEq(hook.afterSwapCount(poolId), 0);
+    function test_SwapZeroForOneExactInput_noBridge() public {
+        // positions were created in setup()
 
         uint256 balanceOfC1AliceBefore = currencyC1.balanceOf(address(alice));
         assertEq(balanceOfC1AliceBefore, 0);
@@ -166,7 +171,7 @@ contract PortalHookTest is Test, Fixtures {
         assertEq(balanceOfC1AliceAfter, 0);
     }
 
-    function test_OneForZeroExactInput_noBridge() public {
+    function test_SwapOneForZeroExactInput_noBridge() public {
         // positions were created in setup()
 
         uint256 balanceC0AliceBefore = currencyC0.balanceOf(address(alice));
@@ -230,5 +235,42 @@ contract PortalHookTest is Test, Fixtures {
         assertEq(balanceC1AliceAfter, 996900609009281774);
 
         assertEq(int256(swapDelta.amount0()), amountSpecified);
+    }
+
+    function test_SwapAndBridge_oneForZero() public {
+        // positions were created in setup()
+
+        // MockERC20(address(currencyC0)).approve(address(hook), 1 ether);
+
+        uint256 balanceC0AliceBefore = currencyC0.balanceOf(alice);
+        uint256 balanceC1AliceBefore = currencyC1.balanceOf(alice);
+
+        // Perform a test swap //
+        bytes memory hookData = abi.encode(alice, true);
+        bool zeroForOne = false;
+        int256 amountSpecified = -1e18; // negative number indicates exact input swap!
+        BalanceDelta swapDelta = swap(
+            key,
+            zeroForOne,
+            amountSpecified,
+            hookData
+        );
+        // ------------------- //
+
+        uint256 balanceC0AliceAfter = currencyC0.balanceOf(alice);
+        uint256 balanceC1AliceAfter = currencyC1.balanceOf(alice);
+
+        // Input Token
+        // assertEq(
+        //     balanceC0AliceAfter,
+        //     balanceC0AliceBefore - uint256(-amountSpecified)
+        // );
+
+        // Output Token
+        // TODO improve this
+        console.log(balanceC0AliceAfter);
+        assertEq(balanceC0AliceAfter, 996900609009281774);
+
+        assertEq(int256(swapDelta.amount1()), amountSpecified);
     }
 }

@@ -31,12 +31,6 @@ contract PortalHook is BaseHook {
     // a single hook contract should be able to service multiple pools
     // ---------------------------------------------------------------
 
-    mapping(PoolId => uint256 count) public beforeSwapCount;
-    mapping(PoolId => uint256 count) public afterSwapCount;
-
-    mapping(PoolId => uint256 count) public beforeAddLiquidityCount;
-    mapping(PoolId => uint256 count) public beforeRemoveLiquidityCount;
-
     // CCIP
     address immutable ccipRouter;
     address immutable linkToken;
@@ -67,7 +61,7 @@ contract PortalHook is BaseHook {
                 afterAddLiquidity: false,
                 beforeRemoveLiquidity: false,
                 afterRemoveLiquidity: false,
-                beforeSwap: true, //
+                beforeSwap: false, //
                 afterSwap: true, //
                 beforeDonate: false,
                 afterDonate: false,
@@ -82,20 +76,6 @@ contract PortalHook is BaseHook {
     // NOTE: see IHooks.sol for function documentation
     // -----------------------------------------------
 
-    function beforeSwap(
-        address,
-        PoolKey calldata key,
-        IPoolManager.SwapParams calldata,
-        bytes calldata
-    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
-        beforeSwapCount[key.toId()]++;
-        return (
-            BaseHook.beforeSwap.selector,
-            BeforeSwapDeltaLibrary.ZERO_DELTA,
-            0
-        );
-    }
-
     function afterSwap(
         address,
         PoolKey calldata key,
@@ -103,15 +83,11 @@ contract PortalHook is BaseHook {
         BalanceDelta delta,
         bytes calldata hookData
     ) external override returns (bytes4, int128) {
-        // TODO remove later
-        afterSwapCount[key.toId()]++;
-
         (address receiver, bool isBridgeTx) = abi.decode(
             hookData,
             (address, bool)
         );
-        console.log("rever");
-        console.log(receiver);
+
         if (isBridgeTx) {
             int128 outputAmount = settleCurrency(
                 key,

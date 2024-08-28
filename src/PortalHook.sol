@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity ^0.8.24;
 
 import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
@@ -15,7 +15,8 @@ import {IERC20} from "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-sol
 import {LinkTokenInterface} from "@chainlink/contracts/src/v0.8/interfaces/LinkTokenInterface.sol";
 import {IRouterClient} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRouterClient.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
-
+// import {EtherSenderReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/applications/EtherSenderReceiver.sol";
+// EtherSenderReceiver.sol
 import "forge-std/console.sol";
 
 contract PortalHook is BaseHook {
@@ -36,7 +37,8 @@ contract PortalHook is BaseHook {
     address immutable linkToken;
 
     PayFeesIn public bridgeFeeTokenType = PayFeesIn.Native; // for local testing
-    uint64 destinationChainSelector = 16015286601757825753; // for local testing
+    // TODO remove
+    uint64 defaultdestinationChainSelector = 16015286601757825753; // for local testing
 
     constructor(
         IPoolManager _poolManager,
@@ -61,7 +63,7 @@ contract PortalHook is BaseHook {
                 afterAddLiquidity: false,
                 beforeRemoveLiquidity: false,
                 afterRemoveLiquidity: false,
-                beforeSwap: false, //
+                beforeSwap: false,
                 afterSwap: true, //
                 beforeDonate: false,
                 afterDonate: false,
@@ -72,10 +74,6 @@ contract PortalHook is BaseHook {
             });
     }
 
-    // -----------------------------------------------
-    // NOTE: see IHooks.sol for function documentation
-    // -----------------------------------------------
-
     function afterSwap(
         address,
         PoolKey calldata key,
@@ -83,17 +81,22 @@ contract PortalHook is BaseHook {
         BalanceDelta delta,
         bytes calldata hookData
     ) external override returns (bytes4, int128) {
-        (address receiver, bool isBridgeTx) = abi.decode(
-            hookData,
-            (address, bool)
-        );
+        (
+            address receiver,
+            bool isBridgeTx,
+            uint64 destinationChainSelector
+        ) = abi.decode(hookData, (address, bool, uint64));
 
-        if (isBridgeTx) {
+        // add more validations
+        // TODO killswitch
+        if (isBridgeTx && destinationChainSelector != 0) {
+            // TODO handle ETH
             int128 outputAmount = settleCurrency(
                 key,
                 delta,
                 params.zeroForOne,
-                receiver
+                receiver,
+                destinationChainSelector
             );
             return (BaseHook.afterSwap.selector, outputAmount);
         }
@@ -112,32 +115,22 @@ contract PortalHook is BaseHook {
         PoolKey memory key,
         BalanceDelta delta,
         bool zeroForOne,
-        address receiver
+        address receiver,
+        uint64 destinationChainSelector
     ) internal returns (int128) {
         int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
+        Currency outputCurrency = zeroForOne ? key.currency1 : key.currency0;
 
-        IERC20 outputToken;
+        poolManager.take(outputCurrency, address(this), uint128(outputAmount));
+        IERC20 outputToken = IERC20(Currency.unwrap(outputCurrency));
+        IERC20(outputToken).approve(ccipRouter, uint128(outputAmount));
 
-        if (zeroForOne) {
-            poolManager.take(
-                key.currency1,
-                address(this),
-                uint128(outputAmount)
-            );
-
-            outputToken = IERC20(Currency.unwrap(key.currency1));
-            IERC20(outputToken).approve(ccipRouter, uint128(outputAmount));
-        } else {
-            poolManager.take(
-                key.currency0,
-                address(this),
-                uint128(outputAmount)
-            );
-            outputToken = IERC20(Currency.unwrap(key.currency0));
-            IERC20(outputToken).approve(ccipRouter, uint128(outputAmount));
-        }
-
-        bridgeTokens(receiver, address(outputToken), uint128(outputAmount));
+        bridgeTokens(
+            receiver,
+            address(outputToken),
+            uint128(outputAmount),
+            destinationChainSelector
+        );
 
         return outputAmount;
     }
@@ -145,7 +138,8 @@ contract PortalHook is BaseHook {
     function bridgeTokens(
         address receiver,
         address outputToken,
-        uint256 outputAmount
+        uint256 outputAmount,
+        uint64 destinationChainSelector
     ) internal {
         // TODO refactor
 
@@ -160,7 +154,7 @@ contract PortalHook is BaseHook {
 
         tokensToSendDetails[0] = tokenToSendDetails;
 
-        // brdige
+        // bridge
 
         Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
             receiver: abi.encode(receiver),

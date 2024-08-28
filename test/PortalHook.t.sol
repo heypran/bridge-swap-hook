@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
@@ -151,7 +151,11 @@ contract PortalHookTest is Test, Fixtures {
         // Perform a test swap //
 
         // pass alice address to receive bridge funds & set bridging to false
-        bytes memory hookData = abi.encode(address(alice), false);
+        bytes memory hookData = abi.encode(
+            address(alice),
+            false,
+            0 // selector for testing
+        );
 
         bool zeroForOne = true;
         int256 amountSpecified = -1e18; // negative number indicates exact input swap!
@@ -180,7 +184,11 @@ contract PortalHookTest is Test, Fixtures {
         // Perform a test swap //
 
         // pass alice address to receive bridge funds & set bridging to false
-        bytes memory hookData = abi.encode(address(alice), false);
+        bytes memory hookData = abi.encode(
+            address(alice),
+            false,
+            0 // selector for testing
+        );
 
         // Perform a test swap //
         bool zeroForOne = false;
@@ -209,7 +217,11 @@ contract PortalHookTest is Test, Fixtures {
         uint256 balanceC1AliceBefore = currencyC1.balanceOf(alice);
 
         // Perform a test swap //
-        bytes memory hookData = abi.encode(alice, true);
+        bytes memory hookData = abi.encode(
+            alice,
+            true,
+            16015286601757825753 // selector for testing
+        );
         bool zeroForOne = true;
         int256 amountSpecified = -1e18; // negative number indicates exact input swap!
         BalanceDelta swapDelta = swap(
@@ -246,7 +258,11 @@ contract PortalHookTest is Test, Fixtures {
         uint256 balanceC1AliceBefore = currencyC1.balanceOf(alice);
 
         // Perform a test swap //
-        bytes memory hookData = abi.encode(alice, true);
+        bytes memory hookData = abi.encode(
+            alice,
+            true,
+            16015286601757825753 // selector for testing
+        );
         bool zeroForOne = false;
         int256 amountSpecified = -1e18; // negative number indicates exact input swap!
         BalanceDelta swapDelta = swap(

@@ -15,16 +15,26 @@ import {IERC20} from "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-sol
 import {LinkTokenInterface} from "@chainlink/contracts/src/v0.8/interfaces/LinkTokenInterface.sol";
 import {IRouterClient} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRouterClient.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
+
 // import {EtherSenderReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/applications/EtherSenderReceiver.sol";
 // EtherSenderReceiver.sol
 import "forge-std/console.sol";
+// Find good alternative
+import {CurrencySettler} from "v4-core/test/utils/CurrencySettler.sol";
 
 contract PortalHook is BaseHook {
     using PoolIdLibrary for PoolKey;
+    using CurrencySettler for Currency;
 
     enum PayFeesIn {
         Native,
         LINK
+    }
+
+    struct CrossChainSwapParams {
+        PoolKey key;
+        address receiver;
+        IPoolManager.SwapParams params;
     }
 
     // NOTE: ---------------------------------------------------------
@@ -81,24 +91,26 @@ contract PortalHook is BaseHook {
         BalanceDelta delta,
         bytes calldata hookData
     ) external override returns (bytes4, int128) {
-        (
-            address receiver,
-            bool isBridgeTx,
-            uint64 destinationChainSelector
-        ) = abi.decode(hookData, (address, bool, uint64));
+        if (hookData.length > 0) {
+            (
+                address receiver,
+                bool isBridgeTx,
+                uint64 destinationChainSelector
+            ) = abi.decode(hookData, (address, bool, uint64));
 
-        // add more validations
-        // TODO killswitch
-        if (isBridgeTx && destinationChainSelector != 0) {
-            // TODO handle ETH
-            int128 outputAmount = settleCurrency(
-                key,
-                delta,
-                params.zeroForOne,
-                receiver,
-                destinationChainSelector
-            );
-            return (BaseHook.afterSwap.selector, outputAmount);
+            // add more validations
+            // TODO killswitch
+            if (isBridgeTx && destinationChainSelector != 0) {
+                // TODO handle ETH
+                int128 outputAmount = settleCurrency(
+                    key,
+                    delta,
+                    params.zeroForOne,
+                    receiver,
+                    destinationChainSelector
+                );
+                return (BaseHook.afterSwap.selector, outputAmount);
+            }
         }
 
         // bool exactInput = params.amountSpecified < 0;
@@ -109,6 +121,66 @@ contract PortalHook is BaseHook {
         // console.logInt(unspecifiedAmount);
 
         return (BaseHook.afterSwap.selector, 0);
+    }
+
+    function crossChainSwap(bytes calldata swapInstruction) external payable {
+        // CrossChainSwapParams memory params = abi.decode(
+        //     swapInstruction,
+        //     (CrossChainSwapParams)
+        // );
+
+        BalanceDelta delta = abi.decode(
+            poolManager.unlock(swapInstruction),
+            (BalanceDelta)
+        );
+
+        // handle any eth related transfer?
+    }
+
+    function _unlockCallback(
+        bytes calldata rawData
+    ) internal virtual override onlyByPoolManager returns (bytes memory) {
+        CrossChainSwapParams memory data = abi.decode(
+            rawData,
+            (CrossChainSwapParams)
+        );
+
+        BalanceDelta delta = poolManager.swap(data.key, data.params, "");
+
+        if (delta.amount0() < 0) {
+            data.key.currency0.settle(
+                poolManager,
+                data.receiver,
+                uint128(-delta.amount0()),
+                false
+            );
+        }
+        if (delta.amount1() < 0) {
+            data.key.currency1.settle(
+                poolManager,
+                data.receiver,
+                uint128(-delta.amount1()),
+                false
+            );
+        }
+        if (delta.amount0() > 0) {
+            data.key.currency0.take(
+                poolManager,
+                data.receiver,
+                uint128(delta.amount0()),
+                false
+            );
+        }
+        if (delta.amount1() > 0) {
+            data.key.currency1.take(
+                poolManager,
+                data.receiver,
+                uint128(delta.amount1()),
+                false
+            );
+        }
+
+        return abi.encode(delta);
     }
 
     function settleCurrency(

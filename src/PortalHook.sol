@@ -15,11 +15,10 @@ import {IERC20} from "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-sol
 import {LinkTokenInterface} from "@chainlink/contracts/src/v0.8/interfaces/LinkTokenInterface.sol";
 import {IRouterClient} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRouterClient.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
-
-// import {EtherSenderReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/applications/EtherSenderReceiver.sol";
-// EtherSenderReceiver.sol
+import {CCIPReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/applications/CCIPReceiver.sol";
 import "forge-std/console.sol";
-// Find good alternative
+
+// Find alternative since this seems test library
 import {CurrencySettler} from "v4-core/test/utils/CurrencySettler.sol";
 
 contract PortalHook is BaseHook {
@@ -47,8 +46,17 @@ contract PortalHook is BaseHook {
     address immutable linkToken;
 
     PayFeesIn public bridgeFeeTokenType = PayFeesIn.Native; // for local testing
-    // TODO remove
-    uint64 defaultdestinationChainSelector = 16015286601757825753; // for local testing
+
+    bytes32[] public receivedMessages; // Array to keep track of the IDs of received messages.
+
+    // Event emitted when a message is received from another chain.
+    event MessageReceived(
+        bytes32 indexed messageId, // The unique ID of the message.
+        uint64 indexed sourceChainSelector, // The chain selector of the source chain.
+        address sender, // The address of the sender from the source chain.
+        bytes message, // The message that was received.
+        Client.EVMTokenAmount tokenAmount // The token amount that was received.
+    );
 
     constructor(
         IPoolManager _poolManager,
@@ -98,8 +106,7 @@ contract PortalHook is BaseHook {
                 uint64 destinationChainSelector
             ) = abi.decode(hookData, (address, bool, uint64));
 
-            // add more validations
-            // TODO killswitch
+            // TODO add more validations
             if (isBridgeTx && destinationChainSelector != 0) {
                 // TODO handle ETH
                 int128 outputAmount = settleCurrency(
@@ -113,28 +120,7 @@ contract PortalHook is BaseHook {
             }
         }
 
-        // bool exactInput = params.amountSpecified < 0;
-
-        // int128 unspecifiedAmount = exactInput == params.zeroForOne
-        //     ? delta.amount1()
-        //     : delta.amount0();
-        // console.logInt(unspecifiedAmount);
-
         return (BaseHook.afterSwap.selector, 0);
-    }
-
-    function crossChainSwap(bytes calldata swapInstruction) external payable {
-        // CrossChainSwapParams memory params = abi.decode(
-        //     swapInstruction,
-        //     (CrossChainSwapParams)
-        // );
-
-        BalanceDelta delta = abi.decode(
-            poolManager.unlock(swapInstruction),
-            (BalanceDelta)
-        );
-
-        // handle any eth related transfer?
     }
 
     function _unlockCallback(

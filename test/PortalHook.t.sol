@@ -94,8 +94,13 @@ contract PortalHookTest is Test, Fixtures {
         );
 
         // mint some ccip tokens to hook
-        // (internal function is modified to mint
+        // Note: (internal function is modified to mint
         // many tokens in one go)
+        /*
+               function drip(address to, uint256 amount) external {
+                    _mint(to, amount);
+                }
+        */
         // alternative is run the internal function in a loop
         currencyC0.drip(address(this), 2 ** 255);
         currencyC1.drip(address(this), 2 ** 255);
@@ -119,8 +124,6 @@ contract PortalHookTest is Test, Fixtures {
         poolId = key.toId();
         manager.initialize(key, SQRT_PRICE_1_1, ZERO_BYTES);
 
-        // SQRT 0.001 18,6 - 79228162514264337593543950
-        // Provide full-range liquidity to the pool
         modifyLiquidityRouter.modifyLiquidity(
             key,
             IPoolManager.ModifyLiquidityParams(
@@ -133,6 +136,7 @@ contract PortalHookTest is Test, Fixtures {
         );
     }
 
+    // not used
     function dripToUser(
         Currency currency,
         address user,
@@ -211,11 +215,6 @@ contract PortalHookTest is Test, Fixtures {
     function test_SwapAndBridge_zeroForOne() public {
         // positions were created in setup()
 
-        // MockERC20(address(currencyC0)).approve(address(hook), 1 ether);
-
-        uint256 balanceC0AliceBefore = currencyC0.balanceOf(alice);
-        uint256 balanceC1AliceBefore = currencyC1.balanceOf(alice);
-
         // Perform a test swap //
         bytes memory hookData = abi.encode(
             alice,
@@ -232,30 +231,16 @@ contract PortalHookTest is Test, Fixtures {
         );
         // ------------------- //
 
-        uint256 balanceC0AliceAfter = currencyC0.balanceOf(alice);
         uint256 balanceC1AliceAfter = currencyC1.balanceOf(alice);
-
-        // Input Token
-        // assertEq(
-        //     balanceC0AliceAfter,
-        //     balanceC0AliceBefore - uint256(-amountSpecified)
-        // );
 
         // Output Token
         // TODO improve this
-        console.log(balanceC1AliceAfter);
         assertEq(balanceC1AliceAfter, 996900609009281774);
-
         assertEq(int256(swapDelta.amount0()), amountSpecified);
     }
 
     function test_SwapAndBridge_oneForZero() public {
         // positions were created in setup()
-
-        // MockERC20(address(currencyC0)).approve(address(hook), 1 ether);
-
-        uint256 balanceC0AliceBefore = currencyC0.balanceOf(alice);
-        uint256 balanceC1AliceBefore = currencyC1.balanceOf(alice);
 
         // Perform a test swap //
         bytes memory hookData = abi.encode(
@@ -274,19 +259,9 @@ contract PortalHookTest is Test, Fixtures {
         // ------------------- //
 
         uint256 balanceC0AliceAfter = currencyC0.balanceOf(alice);
-        uint256 balanceC1AliceAfter = currencyC1.balanceOf(alice);
-
-        // Input Token
-        // assertEq(
-        //     balanceC0AliceAfter,
-        //     balanceC0AliceBefore - uint256(-amountSpecified)
-        // );
 
         // Output Token
-        // TODO improve this
-        console.log(balanceC0AliceAfter);
         assertEq(balanceC0AliceAfter, 996900609009281774);
-
         assertEq(int256(swapDelta.amount1()), amountSpecified);
     }
 }

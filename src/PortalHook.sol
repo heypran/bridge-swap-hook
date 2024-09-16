@@ -109,6 +109,7 @@ contract PortalHook is BaseHook {
             // TODO add more validations
             if (isBridgeTx && destinationChainSelector != 0) {
                 // TODO handle ETH
+                // handle zeroForOne trades
                 int128 outputAmount = settleCurrency(
                     key,
                     delta,
